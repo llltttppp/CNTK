@@ -162,17 +162,10 @@ namespace CNTK
         const auto gaussianNoiseInjectionStdDev = GetCurrentTrainingParameterValue(m_additionalOptions.gaussianNoiseInjectionStdDev);
         if (gaussianNoiseInjectionStdDev > 0)
         {
-            const auto& gradientMatrix = gradientValue->GetWritableMatrix<ElementType>();
+            const auto& sgdUpdateNoise = Matrix<ElementType>::RandomGaussian(parameterMatrix->GetNumRows(), parameterMatrix->GetNumCols(),
+                CPUDEVICE, ElementType(0.0), ElementType(gaussianNoiseInjectionStdDev), m_noiseInjectionSeed++);
 
-            Matrix<ElementType> sgdUpdateNoise((DEVICEID_TYPE)parameterMatrix->GetDeviceId());
-
-            // get the gradient structure since gradient is sparse
-            sgdUpdateNoise.SetValue(*gradientMatrix);
-
-            const auto noiseStdDev = gaussianNoiseInjectionStdDev;
-
-            // reset its value to random
-            sgdUpdateNoise.SetGaussianRandomValue(ElementType(0.0), ElementType(noiseStdDev));
+            sgdUpdateNoise.TransferToDeviceIfNotThere(parameterMatrix->GetDeviceId(), true);
 
             Matrix<ElementType>::ScaleAndAdd(ElementType(1.0), sgdUpdateNoise, *parameterMatrix);
         }
@@ -198,7 +191,8 @@ namespace CNTK
                              AdditionalLearningOptions additionalOptions,
                              bool allocateSmoothGradients /* = true */)
                              : Learner(parameters, learningRateSchedule),
-                             m_additionalOptions(additionalOptions)
+                             m_additionalOptions(additionalOptions), 
+                             m_noiseInjectionSeed(Internal::GenerateRandomSeed())
     {
         std::unordered_set<Parameter> uniqueParameters(parameters.begin(), parameters.end());
 
@@ -329,6 +323,7 @@ namespace CNTK
         checkpoint[sampleCountKey] = m_sampleCount;
         checkpoint[minibatchCountKey] = m_minibatchCount;
         checkpoint[learningRateScheduleKey] = m_learningRateSchedule.Serialize();
+        checkpoint[noiseInjectionSeedKey] = m_noiseInjectionSeed;
 
         // TODO: should we also save momentum schedule into the checkpoint?
         // If that is the case, need to be able to override this method in subclasses.
@@ -358,6 +353,12 @@ namespace CNTK
 
         m_sampleCount = checkpoint[sampleCountKey].Value<size_t>();
         m_minibatchCount = checkpoint[minibatchCountKey].Value<size_t>();
+
+        if (checkpoint.Contains(noiseInjectionSeedKey)) 
+        {
+            m_noiseInjectionSeed = checkpoint[noiseInjectionSeedKey].Value<size_t>();
+        }
+
         // TODO: which learning rate schedule should take precedence here? 
         // The one given at construction time or the one loaded from a checkpoint?
         m_learningRateSchedule = TrainingParameterSchedule<double>::Deserialize(checkpoint[learningRateScheduleKey].Value<Dictionary>());
