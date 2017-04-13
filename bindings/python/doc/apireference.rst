@@ -15,4 +15,3 @@ Python API Reference
    Ops <cntk.ops.rst>
    Train <cntk.train>
    Eval <cntk.eval>
-   Module reference <modules>
