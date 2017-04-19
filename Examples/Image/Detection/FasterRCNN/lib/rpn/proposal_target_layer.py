@@ -29,7 +29,10 @@ class ProposalTargetLayer(UserFunction):
 
         # layer_params = yaml.load(self.param_str_)
         self._num_classes = cfg["CNTK"].NUM_CLASSES # layer_params['num_classes']
-        self._rois_per_image = cfg["CNTK"].ROIS_PER_IMAGE
+
+        cfg_key = 'TRAIN' # str(self.phase) # either 'TRAIN' or 'TEST'
+        self._rois_per_image = cfg[cfg_key].RPN_POST_NMS_TOP_N
+        #self._rois_per_image = cfg["CNTK"].ROIS_PER_IMAGE
         self._count = 0
         self._fg_num = 0
         self._bg_num = 0
@@ -224,6 +227,7 @@ def _compute_targets(ex_rois, gt_rois, labels):
     assert gt_rois.shape[1] == 4
 
     targets = bbox_transform(ex_rois, gt_rois)
+
     if cfg.TRAIN.BBOX_NORMALIZE_TARGETS_PRECOMPUTED:
         # Optionally normalize targets by a precomputed mean and stdev
         targets = ((targets - np.array(cfg.TRAIN.BBOX_NORMALIZE_MEANS))
@@ -278,5 +282,10 @@ def _sample_rois(all_rois, gt_boxes, fg_rois_per_image, rois_per_image, num_clas
 
     bbox_targets, bbox_inside_weights = \
         _get_bbox_regression_labels(bbox_target_data, num_classes)
+
+    # Debug code
+    temp = bbox_targets * bbox_inside_weights
+    if abs(temp).max() > 1.0:
+        import pdb; pdb.set_trace()
 
     return labels, rois, bbox_targets, bbox_inside_weights

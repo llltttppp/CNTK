@@ -55,18 +55,6 @@ class IgnoreLabel(UserFunction):
 
         # gradients for prediction: propagate only for those that were not ignored
         if self.inputs[0] in variables:
-            # since we set target = pred in forward the gradients should already be zero
+            # since we set target = pred in forward the gradients for ignored entries should already be zero
             variables[self.inputs[0]] = root_gradients[self.outputs[0]]
 
-            #ignore_ind = state
-            #gradients = root_gradients[self.outputs[0]]
-
-            #bg_grads = gradients[0,0,:]
-            #fg_grads = gradients[0,1,:]
-
-            #bg_grads[ignore_ind] = 0.0
-            #fg_grads[ignore_ind] = 0.0
-
-            #all_grads = np.vstack((bg_grads, fg_grads))
-            #all_grads.shape = (1,) + all_grads.shape
-            #variables[self.inputs[0]] = all_grads

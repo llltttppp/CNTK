@@ -8,7 +8,6 @@
 from cntk import output_variable
 from cntk.ops.functions import UserFunction
 import numpy as np
-import yaml
 from fast_rcnn.config import cfg
 from generate_anchors import generate_anchors
 from fast_rcnn.bbox_transform import bbox_transform_inv, clip_boxes
@@ -24,17 +23,16 @@ class ProposalLayer(UserFunction):
     transformations to a set of regular boxes (called "anchors").
     """
 
-    def __init__(self, arg1, arg2, name='ProposalLayer', im_info=None, rois_per_image = 100):
+    def __init__(self, arg1, arg2, name='ProposalLayer', im_info=None):
         super(ProposalLayer, self).__init__([arg1, arg2], name=name)
         # parse the layer parameter string, which must be valid YAML
-        #layer_params = yaml.load(self.param_str_)
+        # layer_params = yaml.load(self.param_str_)
 
         self._feat_stride = 16 # layer_params['feat_stride']
         anchor_scales = (8, 16, 32) # layer_params.get('scales', (8, 16, 32))
         self._anchors = generate_anchors(scales=np.array(anchor_scales))
         self._num_anchors = self._anchors.shape[0]
         self._im_info = im_info
-        self._rois_per_image = cfg["CNTK"].ROIS_PER_IMAGE
 
         if DEBUG:
             print ('feat_stride: {}'.format(self._feat_stride))
@@ -45,12 +43,13 @@ class ProposalLayer(UserFunction):
         # rois blob: holds R regions of interest, each is a 5-tuple
         # (n, x1, y1, x2, y2) specifying an image batch index n and a
         # rectangle (x1, y1, x2, y2)
-        #top[0].reshape(1, 5)
+        # top[0].reshape(1, 5)
         # for CNTK the proposal shape is [4 x roisPerImage], and mirrored in Python
-        proposalShape = (self._rois_per_image, 4)
+        cfg_key = 'TRAIN' # str(self.phase) # either 'TRAIN' or 'TEST'
+        proposalShape = (cfg[cfg_key].RPN_POST_NMS_TOP_N, 4)
 
         # scores blob: holds scores for R regions of interest
-        #if len(top) > 1:
+        # if len(top) > 1:
         #    top[1].reshape(1, 1, 1, 1)
 
         return [output_variable(proposalShape, self.inputs[0].dtype, self.inputs[0].dynamic_axes,
@@ -59,7 +58,6 @@ class ProposalLayer(UserFunction):
     # returns
     # - pred_boxes (n, 4) as [x_low, y_low, x_high, y_high]
     def forward(self, arguments, device=None, outputs_to_retain=None):
-        if debug_fwd: print("--> Entering forward in {}".format(self.name))
         # Algorithm:
         #
         # for each (H, W) location i
@@ -72,6 +70,7 @@ class ProposalLayer(UserFunction):
         # apply NMS with threshold 0.7 to remaining proposals
         # take after_nms_topN proposals after NMS
         # return the top proposals (-> RoIs top, scores top)
+        if debug_fwd: print("--> Entering forward in {}".format(self.name))
 
         bottom = arguments
         assert bottom[0].data.shape[0] == 1, \
@@ -79,13 +78,13 @@ class ProposalLayer(UserFunction):
 
         cfg_key = 'TRAIN' # str(self.phase) # either 'TRAIN' or 'TEST'
         pre_nms_topN  = cfg[cfg_key].RPN_PRE_NMS_TOP_N
-        post_nms_topN = cfg["CNTK"].ROIS_PER_IMAGE
+        post_nms_topN = cfg[cfg_key].RPN_POST_NMS_TOP_N
         nms_thresh    = cfg[cfg_key].RPN_NMS_THRESH
         min_size      = cfg[cfg_key].RPN_MIN_SIZE
 
         # the first set of _num_anchors channels are bg probs
         # the second set are the fg probs, which we want
-        #scores = bottom[0][:, self._num_anchors:, :, :]
+        # scores = bottom[0][:, self._num_anchors:, :, :]
         scores = bottom[0][:,1,:, :, :]
         bbox_deltas = bottom[1]
         im_info = self._im_info
@@ -166,16 +165,12 @@ class ProposalLayer(UserFunction):
 
         # pad with zeros if too few rois were found
         num_found_proposals = proposals.shape[0]
-        if num_found_proposals < self._rois_per_image:
+        if num_found_proposals < post_nms_topN:
             if DEBUG:
                 print("Only {} proposals generated in ProposalLayer".format(num_found_proposals))
-            proposals_padded = np.zeros(((self._rois_per_image,) + proposals.shape[1:]), dtype=np.float32)
+            proposals_padded = np.zeros(((post_nms_topN,) + proposals.shape[1:]), dtype=np.float32)
             proposals_padded[:num_found_proposals, :] = proposals
             proposals = proposals_padded
-
-            scores_padded = np.zeros(((self._rois_per_image,) + scores.shape[1:]), dtype=np.float32)
-            scores_padded[:num_found_proposals, :] = scores
-            scores = scores_padded
 
         # Output rois blob
         # Our RPN implementation only supports a single input image, so all
@@ -188,12 +183,12 @@ class ProposalLayer(UserFunction):
         return None, proposals
 
     def backward(self, state, root_gradients, variables):
-        if debug_bkw: print("<-- Entering backward in {}".format(self.name))
         """This layer does not propagate gradients."""
+        if debug_bkw: print("<-- Entering backward in {}".format(self.name))
         pass
 
     def clone(self, cloned_inputs):
-        return ProposalLayer(cloned_inputs[0], cloned_inputs[1], im_info=self._im_info, rois_per_image=self._rois_per_image)
+        return ProposalLayer(cloned_inputs[0], cloned_inputs[1], im_info=self._im_info)
 
 
 def _filter_boxes(boxes, min_size):

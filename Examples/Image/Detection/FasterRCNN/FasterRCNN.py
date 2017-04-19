@@ -68,7 +68,7 @@ if grocery:
     image_width = 1000
     num_classes = len(classes)
     num_rois = cfg["CNTK"].INPUT_ROIS_PER_IMAGE
-    epoch_size = 25
+    epoch_size = 20
     num_test_images = 5
     mb_size = 1
     max_epochs = cfg["CNTK"].MAX_EPOCHS
@@ -86,7 +86,7 @@ else:
     num_classes = len(classes)
     num_rois = cfg["CNTK"].INPUT_ROIS_PER_IMAGE
     epoch_size = 5010
-    num_test_images = 50
+    num_test_images = 4952
     mb_size = 1
     max_epochs = cfg["CNTK"].MAX_EPOCHS
     momentum_time_constant = 10
@@ -136,7 +136,7 @@ def create_mb_source(img_height, img_width, img_channels, n_rois, data_path):
 
 def create_test_mb_source(img_height, img_width, img_channels, n_rois, data_path):
     path = os.path.normpath(os.path.join(abs_path, data_path))
-    map_file = os.path.join(path, "train" + map_filename_postfix)
+    map_file = os.path.join(path, "test" + map_filename_postfix)
 
     if not os.path.exists(map_file):
         raise RuntimeError("File '%s' does not exist. "
@@ -167,8 +167,8 @@ def faster_rcnn_predictor(features, gt_boxes, n_classes):
 
     # Clone the conv layers and the fully connected layers of the network
     conv_layers = combine([conv_node.owner]).clone(CloneMethod.freeze, {feature_node: placeholder()})
-    #fc_layers = combine([last_node.owner]).clone(CloneMethod.clone, {pool_node: placeholder()})
-    # TODO: setting to freeze for now to try learing rates
+    # fc_layers = combine([last_node.owner]).clone(CloneMethod.clone, {pool_node: placeholder()})
+    # TODO: reset to CloneMethod.clone. Setting to freeze for now to try learning rates
     fc_layers = combine([last_node.owner]).clone(CloneMethod.freeze, {pool_node: placeholder()})
 
     # Create the Faster R-CNN model
@@ -226,7 +226,7 @@ def faster_rcnn_predictor(features, gt_boxes, n_classes):
     rpn_cls_prob_reshape = reshape(rpn_cls_prob, shp)
 
     rpn_rois_raw = user_function(ProposalLayer(rpn_cls_prob_reshape, rpn_bbox_pred, im_info=im_info))
-    rpn_rois = plus(rpn_rois_raw, 0, name='rpn_rois')
+    rpn_rois = alias(rpn_rois_raw, name='rpn_rois')
     ptl = user_function(ProposalTargetLayer(rpn_rois, gt_boxes))
     rois_raw = ptl.outputs[0]
     rois = alias(rois_raw, name='rpn_target_rois')
@@ -337,7 +337,6 @@ def train_faster_rcnn(debug_output=False):
 
     # Instantiate the trainer object
     learner = momentum_sgd(loss.parameters, lr_schedule, mm_schedule, l2_regularization_weight=l2_reg_weight)
-    ##trainer = Trainer(frcn_output, (ce, pe), learner)
     trainer = Trainer(None, (loss, pred_error), learner)
 
     # Get minibatches of images and perform model training
@@ -365,31 +364,13 @@ def regress_rois(roi_proposals, roi_regression_factors, labels):
     for i in range(len(labels)):
         label = labels[i]
         if label > 0:
-            # t_ = roi_regression_factors[i:i+1,label*4:(label+1)*4]
-            t_ = roi_regression_factors[i:i+1,(label-1)*4:label*4]
+            #deltas = roi_regression_factors[i:i+1,label*4:(label+1)*4]
+            deltas = roi_regression_factors[i:i+1,(label-1)*4:label*4]
             roi_coords = roi_proposals[i:i+1,:]
 
-            # import pdb; pdb.set_trace()
+            regressed_rois = bbox_transform_inv(roi_coords, deltas)
+            #import pdb; pdb.set_trace()
 
-            regressed_rois = bbox_transform_inv(roi_coords, t_)
-            #x_r = roi_coords[0]
-            #y_r = roi_coords[1]
-            #w_r = roi_coords[2] - roi_coords[0]
-            #h_r = roi_coords[3] - roi_coords[1]
-
-            # x_pred = x_r + t_x * w_r
-            # y_pred = y_r + t_x * h_r
-            # w_pred = exp(t_w) * w_r
-            # h_pred = exp(t_h) * h_r
-            #x_pred = x_r + t_[0] * w_r
-            #y_pred = y_r + t_[1] * h_r
-            #w_pred = exp(t_[2]) * w_r
-            #h_pred = exp(t_[3]) * h_r
-
-            #roi_proposals[i, 0] = x_pred
-            #roi_proposals[i, 1] = y_pred
-            #roi_proposals[i, 2] = x_pred + w_pred
-            #roi_proposals[i, 3] = y_pred + h_pred
             roi_proposals[i,:] = regressed_rois
     return roi_proposals
 
@@ -397,7 +378,7 @@ def regress_rois(roi_proposals, roi_regression_factors, labels):
 def eval_faster_rcnn(model, debug_output=False):
     # get image paths
     path = os.path.normpath(os.path.join(abs_path, base_path))
-    map_file = os.path.join(path, "train" + map_filename_postfix)
+    map_file = os.path.join(path, "test" + map_filename_postfix)
     with open(map_file) as f:
         content = f.readlines()
     img_file_names = [x.split('\t')[1] for x in content]
@@ -415,28 +396,46 @@ def eval_faster_rcnn(model, debug_output=False):
 
     # evaluate test images and write netwrok output to file
     print("Evaluating Faster R-CNN model for %s images." % num_test_images)
-    for i in range(0, num_test_images):
-        data = test_minibatch_source.next_minibatch(1, input_map=input_map)
-        output = frcn_eval.eval(data)
+    visualize_with_regr = True
+    visualize_without_regr = True
+    save_results_as_text = True
 
-        out_dict = dict([(k.name, k) for k in output])
-        out_cls_pred = output[out_dict['cls_pred']][0]
-        out_rpn_rois = output[out_dict['rpn_rois']][0]
-        out_bbox_regr = output[out_dict['bbox_regr']][0]
+    results_base_path = "c:/temp/grocery/" if grocery else "c:/temp/pascal/"
+    results_file_path = results_base_path + "test.z"
+    rois_file_path = results_base_path + "test.rois.txt"
+    with open(results_file_path, 'wb') as results_file, \
+        open(rois_file_path, 'wb') as rois_file:
+        for i in range(0, num_test_images):
+            data = test_minibatch_source.next_minibatch(1, input_map=input_map)
+            output = frcn_eval.eval(data)
 
-        imgPath = img_file_names[i]
-        labels = out_cls_pred.argmax(axis=1)
-        scores = out_cls_pred.max(axis=1).tolist()
+            out_dict = dict([(k.name, k) for k in output])
+            out_cls_pred = output[out_dict['cls_pred']][0]
+            out_rpn_rois = output[out_dict['rpn_rois']][0]
+            out_bbox_regr = output[out_dict['bbox_regr']][0]
 
-        # apply regression to bbox coordinates
-        #regressed_rois = regress_rois(out_rpn_rois, out_bbox_regr, labels)
-        regressed_rois = out_rpn_rois
+            imgPath = img_file_names[i]
+            labels = out_cls_pred.argmax(axis=1)
+            scores = out_cls_pred.max(axis=1).tolist()
 
-        # visualize results
-        imgDebug = visualizeResultsFaster(imgPath, labels, scores, regressed_rois, 1000, 1000,
-                                    classes, nmsKeepIndices=None, boDrawNegativeRois=True)
+            if save_results_as_text:
+                out_values = out_cls_pred.flatten()
+                np.savetxt(results_file, out_values[np.newaxis], fmt="%.6f")
+                roi_values = out_rpn_rois.flatten()
+                np.savetxt(rois_file, roi_values[np.newaxis], fmt="%.1f")
 
-        imsave("c:/temp/{}{}".format(i, os.path.basename(imgPath)), imgDebug)
+            if visualize_without_regr:
+                imgDebug = visualizeResultsFaster(imgPath, labels, scores, out_rpn_rois, 1000, 1000,
+                                            classes, nmsKeepIndices=None, boDrawNegativeRois=True)
+                imsave("{}{}{}".format(results_base_path, i, os.path.basename(imgPath)), imgDebug)
+
+            if visualize_with_regr:
+                # apply regression to bbox coordinates
+                regressed_rois = regress_rois(out_rpn_rois, out_bbox_regr, labels)
+
+                imgDebug = visualizeResultsFaster(imgPath, labels, scores, regressed_rois, 1000, 1000,
+                                            classes, nmsKeepIndices=None, boDrawNegativeRois=True)
+                imsave("{}{}_regr_{}".format(results_base_path, i, os.path.basename(imgPath)), imgDebug)
 
     return
 

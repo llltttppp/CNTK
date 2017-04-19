@@ -12,9 +12,15 @@ pascal_voc2007_jpgimg_rel_path = "../VOCdevkit/VOC2007/JPEGImages/"
 pascal_voc2007_imgsets_rel_path = "../VOCdevkit/VOC2007/ImageSets/Main/"
 pascal_voc2007_annotations_rel_path = "../VOCdevkit/VOC2007/Annotations/"
 
-img_map_input = "../VOCdevkit/VOC2007/ImageSets/Main/trainval.txt"
-img_map_output = "trainval2007.txt"
-roi_map_output = "trainval2007_rois_{}_wh_{}.txt".format("center" if use_center_of_bbox else "topleft", "rel" if use_relative_coords else "abs")
+train = False
+if train:
+    img_map_input = "../VOCdevkit/VOC2007/ImageSets/Main/trainval.txt"
+    img_map_output = "trainval2007.txt"
+    roi_map_output = "trainval2007_rois_{}_wh_{}.txt".format("center" if use_center_of_bbox else "topleft", "rel" if use_relative_coords else "abs")
+else:
+    img_map_input = "../VOCdevkit/VOC2007/ImageSets/Main/test.txt"
+    img_map_output = "testval2007.txt"
+    roi_map_output = "testval2007_rois_{}_wh_{}.txt".format("center" if use_center_of_bbox else "topleft", "rel" if use_relative_coords else "abs")
 
 abs_path = os.path.dirname(os.path.abspath(__file__))
 in_map_file_path = os.path.join(abs_path, img_map_input)

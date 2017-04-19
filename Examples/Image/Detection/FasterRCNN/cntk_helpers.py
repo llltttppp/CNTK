@@ -57,11 +57,12 @@ def visualizeResultsFaster(imgPath, roiLabels, roiScores, roiRelCoords, padWidth
                 color = (255, 0, 0)
             else:
                 color = getColorsPalette()[label]
-            rect = [int(rect_scale * i) for i in roiRelCoords[roiIndex]]
-            rect[0] = max(0, min(padWidth, rect[0]))
-            rect[1] = max(0, min(padHeight, rect[1]))
-            rect[2] = max(0, min(padWidth, rect[2]))
-            rect[3] = max(0, min(padHeight, rect[3]))
+
+            rect = [(rect_scale * i) for i in roiRelCoords[roiIndex]]
+            rect[0] = int(max(0, min(padWidth, rect[0])))
+            rect[1] = int(max(0, min(padHeight, rect[1])))
+            rect[2] = int(max(0, min(padWidth, rect[2])))
+            rect[3] = int(max(0, min(padHeight, rect[3])))
 
             # draw in higher iterations only the detections
             if iter == 0 and boDrawNegativeRois:
