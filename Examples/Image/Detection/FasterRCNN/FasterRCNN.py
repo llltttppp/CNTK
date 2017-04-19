@@ -76,7 +76,7 @@ if dataset == "Grocery":
     epoch_size = 20
     num_test_images = 5
     momentum_time_constant = 10
-elif dataset == "Grocery":
+elif dataset == "Pascal":
     classes = ('__background__',  # always index 0
                'aeroplane', 'bicycle', 'bird', 'boat', 'bottle', 'bus', 'car', 'cat', 'chair', 'cow', 'diningtable',
                'dog', 'horse', 'motorbike', 'person', 'pottedplant', 'sheep', 'sofa', 'train', 'tvmonitor')
@@ -85,7 +85,6 @@ elif dataset == "Grocery":
     test_map_file = os.path.join(base_path, "test2007.txt")
     train_roi_file = os.path.join(base_path, "trainval2007_rois_topleft_wh_rel.txt")
     test_roi_file = os.path.join(base_path, "test2007_rois_topleft_wh_rel.txt")
-    base_path = "C:/src/CNTK/Examples/Image/DataSets/Pascal/mappings/"
     num_classes = len(classes)
     epoch_size = 5010
     num_test_images = 4952
