@@ -662,6 +662,13 @@ namespace CNTK
                 computationNodePtr = New<ToSequenceNode<ElementType>>(network->GetDeviceId(), internalNodeName, internalCNTKDynamicAxisName);
                 break;
             }
+            case PrimitiveOpType::UnpackSequence:
+            {
+                auto paddingValue = functionConfig[PrimitiveFunction::AttributeNameSequenceUnpackPaddingValue].Value<double>();
+                auto suppressMaskOutput = functionConfig[PrimitiveFunction::AttributeNameSequenceUnpackSuppressMaskOutput].Value<bool>();
+                computationNodePtr = New<UnpackSequenceNode<ElementType>>(network->GetDeviceId(), internalNodeName, (ElementType)paddingValue, suppressMaskOutput);
+                break;
+            }
             case PrimitiveOpType::Slice:
             {
                 std::vector<Axis> axis;
@@ -889,9 +896,13 @@ namespace CNTK
             }
             case PrimitiveOpType::ReduceElements:
             {
+                bool keepDimension = true;
+                if (functionConfig.Contains(PrimitiveFunction::AttributeNameReductionKeepDimension))
+                    keepDimension = functionConfig[PrimitiveFunction::AttributeNameReductionKeepDimension].Value<bool>();
+
                 auto reductionAxis = functionConfig[PrimitiveFunction::AttributeNameAxis].Value<Axis>();
                 auto reductionOpName = functionConfig[PrimitiveFunction::AttributeNameReductionOpName].Value<std::wstring>();
-                computationNodePtr = New<ReduceElementsNode<ElementType>>(network->GetDeviceId(), internalNodeName, reductionOpName, AsCNTKInternalAxisIdx(reductionAxis));
+                computationNodePtr = New<ReduceElementsNode<ElementType>>(network->GetDeviceId(), internalNodeName, reductionOpName, AsCNTKInternalAxisIdx(reductionAxis), keepDimension);
                 break;
             }
             case PrimitiveOpType::BatchNormalization:

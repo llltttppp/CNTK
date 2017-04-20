@@ -62,7 +62,7 @@ public:
         }
 
         auto inputDataValue = ::CNTK::MakeSharedObject<::CNTK::Value>(inputDataNDArrayView, ::CNTK::CreateMask(sequenceLengths));
-        auto dummyVar = ::CNTK::InputVariable(::CNTK::AsNDShape(GetSampleLayout()), this->IsValueSparse(), ::CNTK::DataType::Float);
+        auto dummyVar = ::CNTK::InputVariable(::CNTK::AsNDShape(GetSampleLayout()), this->IsValueSparse(), ::CNTK::AsDataType<ElemType>());
 #ifdef _MSC_VER
         auto& outputValuePtrRef = ValuePtrRef();
 #else
@@ -80,7 +80,8 @@ public:
     {
         assert(inputIndex == 0);
 
-        auto gradient = ComputationNode<ElemType>::Unpack(GetSampleLayout(), Gradient(), m_pMBLayout, m_tempUnpackedData, m_tempScatterIndices, /*batchMajor=*/ false, /*maskGaps=*/ true);
+        ElemType gapPadValue = 0;
+        auto gradient = ComputationNode<ElemType>::Unpack(GetSampleLayout(), Gradient(), m_pMBLayout, m_tempUnpackedData, m_tempScatterIndices, /*batchMajor=*/ false, &gapPadValue);
         auto inputGradient = InputRef(inputIndex).GradientTensorFor(InputRef(inputIndex).GetSampleLayout().GetRank(), FrameRange(InputRef(inputIndex).GetMBLayout()));
 
         if (InputRef(inputIndex).ParentOverwritesGradient())
@@ -175,5 +176,209 @@ private:
 
 template class ToSequenceNode<float>;
 template class ToSequenceNode<double>;
+
+// ------------------------------------------------------------------------------------------------
+// UnpackSequenceNode(sequenceData)
+// Converts the sequenceData to non-sequence data by unpacking the sequence along the 
+// the most significant static axis [-1] and padding any gaps with the specified padding value.
+// The node has 2 outputs; viz. the unpacked non-sequence data and a mask denoting the gaps in the 
+// unpacked output due to differences across lengths of the sequences in 'sequenceData'
+// ------------------------------------------------------------------------------------------------
+
+template <class ElemType>
+class UnpackSequenceNode : public ComputationNodeNonLooping<ElemType>, public MultiOutputNode<ElemType>, public NumInputs<1>
+{
+    typedef ComputationNodeNonLooping<ElemType> Base; UsingComputationNodeMembersBoilerplate;
+    static const std::wstring TypeName() { return L"UnpackSequence"; }
+
+public:
+    DeclareConstructorFromConfig(UnpackSequenceNode);
+    UnpackSequenceNode(DEVICEID_TYPE deviceId, const wstring& name, ElemType paddingValue = 0, bool suppressMaskOutput = false)
+        : Base(deviceId, name), MultiOutputNode<ElemType>(suppressMaskOutput ? 1 : 2), m_paddingValue(paddingValue), m_suppressMaskOutput(suppressMaskOutput)
+    {}
+
+    virtual void /*ComputationNodeNonLooping::*/ ForwardPropNonLooping() override
+    {
+        auto inputMBLayout = InputRef(0).GetMBLayout();
+        if (inputMBLayout->HasSequenceBeyondBegin() || inputMBLayout->HasSequenceBeyondEnd())
+            LogicError("%ls: %s node cannot perform sequence axis reduction for truncated sequence.", Base::NodeDescription().c_str(), typeid(*this).name());
+
+        GetMBLayout()->InitAsFrameMode(inputMBLayout->GetNumSequences());
+        UpdateFunctionValuesSize();
+
+#ifdef _MSC_VER
+        auto& outputValuePtrRef = ValuePtrRef();
+#else
+        auto& outputValuePtrRef = this->template ValuePtrRef();
+#endif
+
+        // Directly unpack into Value() matrix
+        auto unpackedInput = ComputationNode<ElemType>::Unpack(InputRef(0).GetSampleLayout(), InputRef(0).Value(), InputRef(0).GetMBLayout(), outputValuePtrRef, m_tempScatterIndices, /*batchMajor=*/ false, &m_paddingValue);
+        if (unpackedInput.GetSOBPtr() != outputValuePtrRef)
+            Value().AssignValuesOf(*unpackedInput.GetSOBPtr());
+
+        if (!m_suppressMaskOutput)
+        {
+            auto numSequences = GetMBLayout()->GetNumSequences();
+            size_t maxSequenceLength = inputMBLayout->GetNumTimeSteps();
+            std::vector<ElemType> maskValues(maxSequenceLength * numSequences, 0);
+            let& inputSequences = inputMBLayout->GetAllSequences();
+            size_t j = 0;
+            for (size_t i = 0; i < inputSequences.size(); i++)
+            {
+                let& seq = inputSequences[i];
+                if (seq.seqId == GAP_SEQUENCE_ID)
+                    continue;
+
+                auto currentSequenceLength = seq.GetNumTimeSteps();
+                auto rangeStart = maskValues.begin() + (j * maxSequenceLength);
+                std::fill(rangeStart, rangeStart + currentSequenceLength, (ElemType)1);
+                j++;
+            }
+            assert(j == numSequences);
+
+            this->m_outputsValue[1]->SetValue(maxSequenceLength, numSequences, outputValuePtrRef->GetDeviceId(), maskValues.data());
+        }
+    }
+
+    virtual void /*ComputationNodeNonLooping::*/ BackpropToNonLooping(size_t inputIndex) override
+    {
+
+        auto numSequences = GetMBLayout()->GetNumSequences();
+        auto gradientSampleLayout = GetSampleLayout();
+        auto gradientDataTensorShape = gradientSampleLayout;
+        gradientDataTensorShape.AppendInPlace(gradientDataTensorShape.GetRank(), numSequences);
+        let& gradientDataMatrix = Gradient();
+        auto gradientDataNDArrayView = ::CNTK::MakeSharedObject<::CNTK::NDArrayView>(::CNTK::AsDataType<ElemType>(),
+            ::CNTK::AsDeviceDescriptor(gradientDataMatrix.GetDeviceId()),
+            ::CNTK::AsStorageFormat(gradientDataMatrix.GetFormat()),
+            ::CNTK::AsNDShape(gradientDataTensorShape),
+            /*readOnly =*/ true,
+            new TensorView<ElemType>(GradientPtr(), gradientDataTensorShape));
+
+        std::vector<size_t> sequenceLengths(numSequences);
+        let& inMBLayout = InputRef(0).GetMBLayout();
+        let& inputSequences = inMBLayout->GetAllSequences();
+        size_t j = 0;
+        for (size_t i = 0; i < inputSequences.size(); i++)
+        {
+            let& seq = inputSequences[i];
+            if (seq.seqId == GAP_SEQUENCE_ID)
+                continue;
+
+            sequenceLengths[j] = seq.GetNumTimeSteps();
+            j++;
+        }
+        assert(j == numSequences);
+
+        auto gradientDataValue = ::CNTK::MakeSharedObject<::CNTK::Value>(gradientDataNDArrayView, ::CNTK::CreateMask(sequenceLengths));
+        auto dummyVar = ::CNTK::InputVariable(::CNTK::AsNDShape(InputRef(0).GetSampleLayout()), gradientDataNDArrayView->IsSparse(), ::CNTK::AsDataType<ElemType>());
+        auto packedGradientMatrixAndLayout = ::CNTK::Utils::GetCNTKImplMatrixAndMBLayoutFromValueObject(dummyVar, gradientDataValue, nullptr, m_tempPackedGradientData, m_tempGatherIndices);
+
+        if (*packedGradientMatrixAndLayout.second != *inMBLayout)
+            LogicError("%ls: %s node unpacked gradient MBLayout does not match input MBLayout.", Base::NodeDescription().c_str(), typeid(*this).name());
+
+        InputRef(0).Gradient() += (*packedGradientMatrixAndLayout.first);
+    }
+
+    virtual bool OutputUsedInComputingInputNodesGradients() const override { return false; }
+    virtual bool InputUsedInComputingInputNodesGradients(size_t childIndex) const override { return false; }
+
+    virtual bool NeedsDynamicValidation() const override { return true; }
+
+    virtual void Validate(bool isFinalValidationPass) override
+    {
+        ComputationNodeBase::Validate(isFinalValidationPass);
+        ComputationNodeBase::m_isValueSparse = Input(0)->IsValueSparse();
+
+        if (!m_pMBLayout)
+        {
+            m_pMBLayout = make_shared<MBLayout>(); // this generates a new layout
+            m_pMBLayout->SetUniqueAxisName(ComputationNodeBase::DefaultNoSequenceAxisName);
+
+            this->m_outputsMBLayout[0] = m_pMBLayout;
+            if (!m_suppressMaskOutput)
+                this->m_outputsMBLayout[1] = m_pMBLayout;
+        }
+
+        TensorShape inputShape = Input(0)->GetSampleLayout();
+        SmallVector<size_t> outDims = inputShape.GetDims();
+        outDims.resize(inputShape.GetRank() + 1, 1);
+        SmallVector<size_t> maskDims = {1};
+        if (isFinalValidationPass)
+        {
+            // we generate its own MBLayout
+            auto inputMBLayout = InputRef(0).GetMBLayout();
+            if (!inputMBLayout)
+                InvalidArgument("%ls %ls operation can only operate on minibatch data (which have a layout).", NodeName().c_str(), OperationName().c_str());
+
+            if (inputMBLayout->GetNumTimeSteps() == 0)
+                LogicError("%ls %ls operation's final validation pass must not be invoked before the input MBLayout has been initialized and populated.", NodeName().c_str(), OperationName().c_str());
+
+            outDims[inputShape.GetRank()] = inputMBLayout->GetNumTimeSteps();
+            maskDims[0] = inputMBLayout->GetNumTimeSteps();
+        }
+
+        this->m_outputsShape[0] = TensorShape(outDims);
+        if (!m_suppressMaskOutput)
+            this->m_outputsShape[1] = TensorShape(maskDims);
+
+        SetDims(TensorShape(outDims), true);
+    }
+
+    void RequestMatricesBeforeForwardProp(MatrixPool& matrixPool) override
+    {
+        Base::RequestMatricesBeforeForwardProp(matrixPool);
+        RequestMatrixFromPool(m_tempScatterIndices, matrixPool, 1, HasMBLayout());
+    }
+
+    void ReleaseMatricesAfterForwardProp(MatrixPool& matrixPool) override
+    {
+        Base::ReleaseMatricesAfterForwardProp(matrixPool);
+        ReleaseMatrixToPool(m_tempScatterIndices, matrixPool);
+    }
+
+    void RequestMatricesBeforeBackprop(MatrixPool& matrixPool) override
+    {
+        Base::RequestMatricesBeforeBackprop(matrixPool);
+        RequestMatrixFromPool(m_tempGatherIndices, matrixPool, 1, HasMBLayout());
+        RequestMatrixFromPool(m_tempPackedGradientData, matrixPool, InputRef(0).GetSampleLayout().GetNumElements(), InputRef(0).HasMBLayout());
+    }
+
+    void ReleaseMatricesAfterBackprop(MatrixPool& matrixPool) override
+    {
+        Base::ReleaseMatricesAfterBackprop(matrixPool);
+        ReleaseMatrixToPool(m_tempGatherIndices, matrixPool);
+        ReleaseMatrixToPool(m_tempPackedGradientData, matrixPool);
+    }
+
+    virtual void Load(File& fstream, size_t modelVersion) override
+    {
+        Base::Load(fstream, modelVersion);
+        fstream >> m_paddingValue;
+        fstream >> m_suppressMaskOutput;
+    }
+
+    virtual void Save(File& fstream) const override
+    {
+        Base::Save(fstream);
+        fstream << m_paddingValue;
+        fstream << m_suppressMaskOutput;
+    }
+
+    ElemType PaddingValue() const { return m_paddingValue; }
+    bool SuppressOutputMask() const { return m_suppressMaskOutput; }
+
+private:
+    ElemType m_paddingValue;
+    bool m_suppressMaskOutput;
+
+    shared_ptr<Matrix<ElemType>> m_tempScatterIndices;
+    shared_ptr<Matrix<ElemType>> m_tempGatherIndices;
+    shared_ptr<Matrix<ElemType>> m_tempPackedGradientData;
+};
+
+template class UnpackSequenceNode<float>;
+template class UnpackSequenceNode<double>;
 
 }}}

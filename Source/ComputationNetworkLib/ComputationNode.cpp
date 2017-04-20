@@ -90,7 +90,7 @@ template<class ElemType>
                                                                   const std::shared_ptr<Matrix<ElemType>>& unpackedDataStorage,
                                                                   const std::shared_ptr<Matrix<ElemType>>& tempIndicesStorage,
                                                                   bool batchMajor,
-                                                                  bool maskGaps)
+                                                                  const ElemType* gapPadValue)
 {
     size_t maxNumTimeSteps = 1;
     size_t numSequences = 1;
@@ -108,8 +108,8 @@ template<class ElemType>
     if ((maxNumTimeSteps == 1) || (numSequences == 1) || (batchMajor && (layout->GetNumParallelSequences() == layout->GetNumSequences())))
     {
         unpackedData = std::make_shared<Matrix<ElemType>>(packedData.AsReference());
-        if (maskGaps && layout && layout->HasGaps())
-            MaskMissingColumnsTo<ElemType>(*unpackedData, layout, FrameRange(layout), 0);
+        if (gapPadValue && layout && layout->HasGaps())
+            MaskMissingColumnsTo<ElemType>(*unpackedData, layout, FrameRange(layout), *gapPadValue);
     }
     else
     {
@@ -119,8 +119,8 @@ template<class ElemType>
         else
             unpackedData->Resize(packedData.GetNumRows(), maxNumTimeSteps * numSequences);
 
-        if (maskGaps)
-            unpackedData->SetValue(0.0f);
+        if (gapPadValue)
+            unpackedData->SetValue(*gapPadValue);
 
         size_t i = 0;
         auto& layoutSequences = layout->GetAllSequences();
@@ -387,12 +387,12 @@ void ComputationNodeBase::ValidateNaryZip(bool isFinalValidationPass, bool allow
 }
 
 // unary reduce-to-(1,1) operation, e.g. MatrixL1RegNode
-void ComputationNodeBase::ValidateUnaryReduce(bool isFinalValidationPass)
+void ComputationNodeBase::ValidateUnaryReduce(bool isFinalValidationPass, bool keepDimension)
 {
     assert(m_inputs.size() == 1);
     ComputationNodeBase::Validate(isFinalValidationPass);
     m_pMBLayout = nullptr; // this node does not hold mini-batch data
-    SetDims(TensorShape(1), false);
+    SetDims(keepDimension ? m_inputs[0]->GetSampleLayout() : TensorShape(1), false);
 }
 
 // binary reduce-to-(1,1) operation, e.g. CrossEntropyWithSoftmaxNode

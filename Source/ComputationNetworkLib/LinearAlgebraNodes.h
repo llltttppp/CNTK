@@ -465,6 +465,7 @@ private:
         TensorView<ElemType> unpackedInput[NumInputs];
         for (int i = 0; i < NumInputs; i++)
         {
+            ElemType gapPadValue = 0;
             unpackedInput[i] = ComputationNode<ElemType>::Unpack(
                 InputRef(i).GetSampleLayout(),
                 InputRef(i).Value(),
@@ -472,7 +473,7 @@ private:
                 m_tempUnpackedValue[i],
                 m_tempScatterIndices[i],
                 /*batchMajor=*/ false,
-                /*maskGaps=*/ true);
+                &gapPadValue);
         }
 
         // note the unpacked input is not the normal MBLayout (batchMajor) so do ColumnSlice directly
@@ -504,6 +505,7 @@ private:
         bool unpacked[NumInputs];
         for (int i = 0; i < NumInputs; i++)
         {
+            ElemType gapPadValue = 0;
             unpackedInput[i] = ComputationNode<ElemType>::Unpack(
                 InputRef(i).GetSampleLayout(),
                 InputRef(i).Value(),
@@ -511,7 +513,7 @@ private:
                 m_tempUnpackedValue[i],
                 m_tempScatterIndices[i],
                 /*batchMajor=*/ false,
-                /*maskGaps=*/ true);
+                &gapPadValue);
 
             unpacked[i] = ((input0MBLayout->GetNumTimeSteps() > 1) && (input0MBLayout->GetNumSequences() > 1));
         }

@@ -56,8 +56,8 @@ def test_lstm_over_lstm_thought_vectors(device_id):
                                        wrt=ce.parameters, outputs=[ce], as_numpy=False)
     
     loss_result = loss_result.as_sequences()
-    assert np.allclose(loss_result[0], [[0.703254], [0.701883], [0.683452]], atol=0.03)
-    assert np.allclose(loss_result[1], [[0.682687], [0.696831]], atol=0.03)
+    assert np.allclose(loss_result[0], [[0.703254], [0.701883], [0.683452]], atol=0.1)
+    assert np.allclose(loss_result[1], [[0.682687], [0.696831]], atol=0.1)
 
 
 def test_sequence_max():

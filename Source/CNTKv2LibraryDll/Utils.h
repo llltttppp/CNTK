@@ -620,6 +620,9 @@ namespace CNTK
     }
 
     NDMaskPtr CreateMask(const std::vector<size_t>& sequenceLengths, const std::vector<bool>& sequenceStartFlags = {}, const DeviceDescriptor& device = DeviceDescriptor::CPUDevice());
+
+    double ReductionIdentityValue(const std::wstring& reductionOpName);
+
     // Helper class to manage a collection of learners.
     class Learners
     {
