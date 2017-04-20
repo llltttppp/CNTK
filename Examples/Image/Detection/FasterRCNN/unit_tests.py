@@ -14,7 +14,7 @@ import numpy as np
 from lib.rpn.proposal_layer import ProposalLayer as CntkProposalLayer
 from lib.rpn.proposal_layer_caffe import ProposalLayer as CaffeProposalLayer
 
-def test_dummy():
+def test_proposal_layer():
     im_info = [1000, 1000, 1]
 
     bg_probs = [0.2, 0.05, 0.05, 0.0, 0.0, 0.1, 0.1, 0.0, 0.5]
@@ -40,7 +40,9 @@ def test_dummy():
     bottom = [np.array([cls_prob_caffe]),np.array([rpn_bbox_pred]),np.array([im_info])]
     top = None # handled through return statement in caffe layer for unit testing
 
+    param_str = "'feat_stride': 16"
     caffe_layer = CaffeProposalLayer()
+    caffe_layer.set_param_str(param_str)
     caffe_layer.setup(bottom, top)
     caffe_output = caffe_layer.forward(bottom, top)
     caffe_proposals = caffe_output[:,1:]
@@ -49,4 +51,4 @@ def test_dummy():
     assert np.allclose(cntk_proposals, caffe_proposals, rtol=0.0, atol=0.0)
 
 if __name__ == '__main__':
-    test_dummy()
+    test_proposal_layer()
